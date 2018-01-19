@@ -313,7 +313,7 @@ function wc_brainblocks_gateway_init() {
             // hasn't been already used before. This avoids replay exploits
             $brainblocks_token = $_POST['brainblocks_token']; // TODO: Need some form of check on the data ...
             
-            $old_results = get_orders( array( '_brainblocks_token' => $brainblocks_token ) );
+            $old_results = wc_get_orders( array( '_brainblocks_token' => $brainblocks_token ) );
             if($old_results->total != 0 ) {
                 $error = ('Token re-use detected.');
             }
