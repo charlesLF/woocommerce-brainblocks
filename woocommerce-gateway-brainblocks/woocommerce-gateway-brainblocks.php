@@ -99,6 +99,8 @@ function wc_brainblocks_gateway_init() {
             add_filter('woocommerce_order_button_html',array( $this, 'display_brainblocks_button_html' ),1);
 
             add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
+            
+            add_filter( 'woocommerce_order_data_store_cpt_get_orders_query', array($this, 'handle_custom_brainblocks_token_query'), 10, 2 );
         }
         
         public function display_brainblocks_button_html($value) {
@@ -306,26 +308,34 @@ function wc_brainblocks_gateway_init() {
             $total = (string)round($order->get_total(), 2);
             $currency = strtolower(get_woocommerce_currency());
             
-            $request       = wp_remote_get( esc_url_raw ( 'https://brainblocks.io/api/session/' . $_POST['brainblocks_token'] . '/verify' ) );
-            $response_code = wp_remote_retrieve_response_code( $request );
-
             $error = '';
-
-            if ( 200 != $response_code ) {
-                    $error = ('Incorrect response code from API (' . $response_code . ')');
-            } 
+            // Before doing any request, make sure the posted brainblocks_token
+            // hasn't been already used before. This avoids replay exploits
+            $brainblocks_token = $_POST['brainblocks_token']; // TODO: Need some form of check on the data ...
+            
+            $old_results = get_orders( array( '_brainblocks_token' => $brainblocks_token ) );
+            if($old_results->total != 0 ) {
+                $error = ('Token re-use detected.');
+            }
             else {
-                $transaction = json_decode( wp_remote_retrieve_body( $request ) );
+                $request       = wp_remote_get( esc_url_raw ( 'https://brainblocks.io/api/session/' . $brainblocks_token . '/verify' ) );
+                $response_code = wp_remote_retrieve_response_code( $request );
 
-                if ($transaction->destination !== $this->settings['destination']) {
-                    $error = ('Incorrect destination: ' . $transaction->destination . ' expected ' . $this->settings['destination']);
-                } else if ($transaction->amount !== $total) {
-                    $error = ('Incorrect amount: ' . var_export($transaction->amount, true) . ' expected ' . var_export($total, true));
-                } else if ($transaction->currency !== $currency) {
-                    $error = ('Incorrect currency: ' . $transaction->currency . ' expected ' . $currency);
+                if ( 200 != $response_code ) {
+                        $error = ('Incorrect response code from API (' . $response_code . ')');
+                } 
+                else {
+                    $transaction = json_decode( wp_remote_retrieve_body( $request ) );
+
+                    if ($transaction->destination !== $this->settings['destination']) {
+                        $error = ('Incorrect destination: ' . $transaction->destination . ' expected ' . $this->settings['destination']);
+                    } else if ($transaction->amount !== $total) {
+                        $error = ('Incorrect amount: ' . var_export($transaction->amount, true) . ' expected ' . var_export($total, true));
+                    } else if ($transaction->currency !== $currency) {
+                        $error = ('Incorrect currency: ' . $transaction->currency . ' expected ' . $currency);
+                    }
                 }
             }
-            
             if ($error) {
                 $order->update_status('failed', $error);
 
@@ -342,6 +352,9 @@ function wc_brainblocks_gateway_init() {
 			// Reduce stock levels
 			$order->reduce_order_stock();
 			
+                        // Save the brainblocks token
+                        $order->update_meta_data( '_brainblocks_token', $brainblocks_token );
+                        
 			// Remove cart
 			WC()->cart->empty_cart();
 			
@@ -351,6 +364,17 @@ function wc_brainblocks_gateway_init() {
 				'redirect'	=> $this->get_return_url( $order )
 			);
 		}
-	
+                
+        public function handle_custom_brainblocks_token_query( $query, $query_vars ) {
+            if ( ! empty( $query_vars['_brainblocks_token'] ) ) {
+                    $query['meta_query'][] = array(
+                            'key' => '_brainblocks_token',
+                            'value' => esc_attr( $query_vars['brainblocks_token'] ),
+                    );
+            }
+
+            return $query;
+        }
+                	
   } // end \WC_Gateway_Brainblocks class
 }
